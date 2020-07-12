@@ -2,14 +2,18 @@ import { CSSResult, LitElement, PropertyValues, TemplateResult, css, customEleme
 import { Measure, Point } from '../logic/score/measure';
 import { RootState, store } from '../store';
 import { setDistance, setLeague, setScore, setSpeed } from '../actions/map';
+import { Track } from '../logic/map';
 
-import { CircuitType } from '../logic/score/scorer';
+import { CircuitType, Score } from '../logic/score/scorer';
 import { ClosingSector } from '../gm/closing-sector';
 import { FaiSectors } from '../gm/fai-sectors';
 import { LEAGUES } from '../logic/score/league/leagues';
 import { PlannerElement } from './planner-element';
 import { connect } from 'pwa-helpers';
 import { formatUnit } from '../logic/units';
+//import { isMobileDevice } from '../logic/util';
+import { BRecord, RecordExtensions } from 'igc-parser';
+import { Solution } from 'igc-xc-score';
 import { Units } from '../reducers/map';
 
 const ROUTE_STROKE_COLORS = {
@@ -17,6 +21,13 @@ const ROUTE_STROKE_COLORS = {
   [CircuitType.OUT_AND_RETURN]: '#ff9933',
   [CircuitType.FLAT_TRIANGLE]: '#ffcc00',
   [CircuitType.FAI_TRIANGLE]: '#ffff00',
+};
+
+const SCORE_STROKE_COLORS = {
+  [CircuitType.OPEN_DISTANCE]: '#b22222',
+  [CircuitType.OUT_AND_RETURN]: '#b22222',
+  [CircuitType.FLAT_TRIANGLE]: '#cd5c5c',
+  [CircuitType.FAI_TRIANGLE]: '#cd5c5c',
 };
 
 const CIRCUIT_SHORT_NAME = {
@@ -37,9 +48,26 @@ const WAYPOINT_FORMATS: { [id: string]: string } = {
 @customElement('path-ctrl-element')
 export class PathCtrlElement extends connect(store)(LitElement) {
   line: google.maps.Polyline | null = null;
+  scoring: {
+    path: google.maps.Polyline | null;
+    closing: google.maps.Polyline | null;
+  } = { path: null, closing: null };
 
   @property({ attribute: false })
   expanded = false;
+
+  
+  @property({ attribute: false })
+  tracks: Track[] | null = null;
+
+  @property({ attribute: false })
+  currentTrack: number | null = null;
+
+  @property({ attribute: false })
+  worker: Worker | null = null;
+
+  @property({ attribute: false })
+  measureIcon: string = 'img/measuring.svg';
 
   @property({ attribute: false })
   units: Units | null = null;
@@ -104,6 +132,8 @@ export class PathCtrlElement extends connect(store)(LitElement) {
       this.speed = state.map.speed;
       this.league = state.map.league;
       this.units = state.map.units;
+      this.tracks = state.map.tracks;
+      this.currentTrack = state.map.currentTrack;
     }
   }
 
@@ -176,14 +206,10 @@ export class PathCtrlElement extends connect(store)(LitElement) {
       } else {
         const line = this.line as google.maps.Polyline;
         line.setMap(null);
-        if (this.flight) {
-          this.flight.setMap(null);
-        }
-        if (this.closingSector) {
-          this.closingSector.setMap(null);
-        }
-        if (this.faiSectors) {
-          this.faiSectors.setMap(null);
+        for (let e of [this.flight, this.closingSector, this.faiSectors, this.scoring.closing, this.scoring.path]) {
+          if (e) {
+            e.setMap(null);
+          }
         }
         store.dispatch(setScore(null));
         google.maps.event.removeListener(this.onAddPoint as google.maps.MapsEventListener);
@@ -333,13 +359,116 @@ export class PathCtrlElement extends connect(store)(LitElement) {
     }
   }
 
+  protected launchScoring(): void {
+    if (this.tracks && this.currentTrack !== null && this.tracks[this.currentTrack]) {
+      const fixes: BRecord[] = [];
+      for (let i = 0; i < this.tracks[this.currentTrack].fixes.lat.length; i++)
+        // Keep this to the bare minimum needed for igc-xc-score
+        fixes[i] = {
+          timestamp: this.tracks[this.currentTrack].fixes.ts[i],
+          latitude: this.tracks[this.currentTrack].fixes.lat[i],
+          longitude: this.tracks[this.currentTrack].fixes.lon[i],
+          pressureAltitude: this.tracks[this.currentTrack].fixes.alt[i],
+          gpsAltitude: this.tracks[this.currentTrack].fixes.alt[i],
+          valid: true,
+          extensions: {} as RecordExtensions,
+          fixAccuracy: null,
+          time: '',
+          enl: null
+        };
+      if (this.worker !== null)
+        this.worker.terminate();
+      this.worker = new Worker('js/xc-score-worker.js');
+      this.worker.onmessage = this.updateScore.bind(this);
+      this.worker.postMessage({ msg: 'xc-score-start', flight: JSON.stringify(fixes), league: this.league });
+      this.measureIcon = 'img/pacman.svg';
+    }
+  }
+
+  protected updateScore(msg: any): void {
+    if (msg.data.msg && (msg.data.msg === 'xc-score-result' || msg.data.msg === 'xc-score-progress')) {
+      const r = JSON.parse(msg.data.r) as Solution;
+      let t: CircuitType;
+      let closedCircuit: boolean = false;
+      switch (r.opt.scoring.code) {
+        case 'tri':
+          t = CircuitType.FLAT_TRIANGLE;
+          closedCircuit = true;
+          break;
+        case 'fai':
+          t = CircuitType.FAI_TRIANGLE;
+          closedCircuit = true;
+          break;
+        default:
+        case 'od':
+          t = CircuitType.OPEN_DISTANCE;
+          break;
+      }
+      const score: Score = {
+        points: r.score ? r.score : 0,
+        distance: r.scoreInfo ? r.scoreInfo.distance * 1000 : 0,
+        closingRadius: r.scoreInfo && r.scoreInfo.cp ? r.scoreInfo.cp.d : 0,
+        multiplier: r.opt.scoring.multiplier,
+        circuit: t,
+        indexes: [0]
+      }
+
+      if (this.scoring.path !== null)
+        this.scoring.path.setMap(null);
+      if (this.scoring.closing !== null)
+        this.scoring.closing.setMap(null);
+      let turnPoints: google.maps.LatLng[] = [];
+      if (r.scoreInfo && r.scoreInfo.tp) {
+        turnPoints = r.scoreInfo.tp.map(p => new google.maps.LatLng(p.y, p.x));
+        if (closedCircuit) {
+          /* Triangle -> first point is also last */
+          turnPoints.push(turnPoints[0]);
+        } else {
+          /* Open distance -> ep.start and ep.finish are actually first and fifth turnpoint */
+          if (r.scoreInfo && r.scoreInfo.ep) {
+            turnPoints.unshift(new google.maps.LatLng(r.scoreInfo.ep.start.y, r.scoreInfo.ep.start.x));
+            turnPoints.push(new google.maps.LatLng(r.scoreInfo.ep.finish.y, r.scoreInfo.ep.finish.x));
+          }
+        }
+        this.scoring.path = new google.maps.Polyline({
+          map: this.map as google.maps.Map,
+          path: turnPoints,
+          strokeColor: SCORE_STROKE_COLORS[score.circuit],
+          strokeWeight: 4,
+          zIndex: 1000,
+        });
+      }
+      let closingPoints: google.maps.LatLng[] = [];
+      if (r.scoreInfo && r.scoreInfo.cp && closedCircuit) {
+        closingPoints = [new google.maps.LatLng(r.scoreInfo.cp.in.y, r.scoreInfo.cp.in.x),
+          new google.maps.LatLng(r.scoreInfo.cp.out.y, r.scoreInfo.cp.out.x)];
+        this.scoring.closing = new google.maps.Polyline({
+          map: this.map as google.maps.Map,
+          path: closingPoints,
+          strokeColor: SCORE_STROKE_COLORS['Out and return'],
+          strokeWeight: 4,
+          zIndex: 1000,
+        });
+      }
+
+      store.dispatch(setScore(score));
+      if (msg.data.msg === 'xc-score-result')
+        this.measureIcon = 'img/measuring.svg';
+    }
+  }
+
   protected render(): TemplateResult {
     // Update the URL on re-rendering
     this.getQrText();
     return this.units
       ? html`
           <link rel="stylesheet" href="https://kit-free.fontawesome.com/releases/latest/css/free.min.css" />
-          <span .hidden=${!this.expanded}>${formatUnit(this.distance, this.units.distance)}</span>
+          <span .hidden=${!this.expanded}>
+            <i class="fas fa-2x" style="cursor: pointer" @click=${this.launchScoring}>
+              <img width="32" height="32" style="vertical-align: middle;" src="${this.measureIcon}" />
+            </i>
+            ${formatUnit(this.distance, this.units.distance)}
+          </span>
           <i class="fas fa-ruler fa-2x" style="cursor: pointer" @click=${this.toggleExpanded}></i>
 
           <ui5-dialog id="share-dialog" header-text="Share">
