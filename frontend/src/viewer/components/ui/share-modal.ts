@@ -5,10 +5,10 @@ import { getModalController, getToastController } from './ion-controllers';
 @customElement('share-modal')
 export class ShareModal extends LitElement {
   @property({ attribute: false })
-  link = '';
+  xctrackLink = '';
 
   @property({ attribute: false })
-  xctrackLink = '';
+  xctsk = '';
 
   render(): TemplateResult {
     return html`
@@ -29,7 +29,12 @@ export class ShareModal extends LitElement {
         </ion-item>
 
         <ion-item lines="full">
-          <img width="200" height="200" src=${`_qr.svg?text=${encodeURIComponent(this.link)}`} style="margin: 0 auto" />
+          <img
+            width="200"
+            height="200"
+            src=${`_qr.svg?text=${encodeURIComponent(`XCTSK:${JSON.stringify(this.xctsk)}`)}`}
+            style="margin: 0 auto"
+          />
         </ion-item>
       </ion-content>
       <ion-footer>
