@@ -515,6 +515,7 @@ export class TrackItems extends connect(store)(LitElement) {
         addUrlParamValues(ParamNames.groupId, ids);
         el.value = '';
       }
+      await menuController.close();
     }
   }
 
