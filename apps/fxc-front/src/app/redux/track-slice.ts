@@ -13,9 +13,8 @@ import * as msg from '../logic/messages';
 // @ts-ignore
 import TrackWorker from '../workers/track?worker';
 import { setTimeSec } from './app-slice';
-import { setEnabled, setRoute } from './planner-slice';
+import { setPlannerEnabled, setPlannerRoute } from './planner-slice';
 import { AppDispatch, AppThunk, RootState } from './store';
-import { Score } from '../logic/score/scorer';
 
 const FETCH_EVERY_SECONDS = 15;
 export const FETCH_FOR_MINUTES = 3;
@@ -44,8 +43,6 @@ export type TrackState = {
   // Whether we are done loading tracks
   loaded: boolean;
 };
-
-export type RuntimeTrackId = Pick<RuntimeTrack, 'id'>;
 
 const initialState: TrackState = {
   currentTrackId: undefined,
@@ -149,12 +146,10 @@ export const fetchTrack = createAsyncThunk('track/fetch', async (params: FetchTr
   if (route && route.alt.length > 0) {
     const coords = [];
     for (let i = 0; i < route.alt.length; i++) {
-      // @ts-ignore funky error: google name not found
       coords.push(new google.maps.LatLng(route.lat[i], route.lon[i]));
     }
-    // @ts-ignore same error
-    api.dispatch(setRoute(google.maps.geometry.encoding.encodePath(coords)));
-    api.dispatch(setEnabled(true));
+    api.dispatch(setPlannerRoute(google.maps.geometry.encoding.encodePath(coords)));
+    api.dispatch(setPlannerEnabled(true));
   }
 
   tracks.forEach((track) => {
@@ -212,8 +207,12 @@ const trackSlice = createSlice({
         state.currentTrackId = String(state.tracks.ids[(index + 1) % state.tracks.ids.length]);
       }
     },
-    patchTrack: (state, action: PayloadAction<Partial<RuntimeTrack> & RuntimeTrackId>) => {
-      doPatchTrack(state, action.payload);
+    patchTrack: (state, action: PayloadAction<Partial<RuntimeTrack> & Pick<RuntimeTrack, 'id'>>) => {
+      const update = action.payload;
+      trackAdapter.updateOne(state.tracks, {
+        id: update.id,
+        changes: update,
+      });
     },
     setFetchingMetadata: (state, action: PayloadAction<boolean>) => {
       state.metadata.fetchPending = action.payload;
@@ -234,9 +233,6 @@ const trackSlice = createSlice({
           delete groupIdToStart[id];
         }
       }
-    },
-    setScore: (state, action: PayloadAction<Score & RuntimeTrackId>) => {
-      doPatchTrack(state, { score: action.payload, id: action.payload.id });
     },
   },
   extraReducers: (builder) => {
@@ -302,13 +298,6 @@ const trackSlice = createSlice({
   },
 });
 
-function doPatchTrack(state: TrackState, update: Partial<RuntimeTrack> & RuntimeTrackId) {
-  trackAdapter.updateOne(state.tracks, {
-    id: update.id,
-    changes: update,
-  });
-}
-
 export const reducer = trackSlice.reducer;
 export const {
   removeTracksByGroupIds,
@@ -318,6 +307,5 @@ export const {
   setLockOnPilot,
   setTrackDomain,
   setTrackLoaded,
-  setScore,
 } = trackSlice.actions;
 export const trackAdapterSelector = trackAdapter.getSelectors((state: RootState) => state.track.tracks);
