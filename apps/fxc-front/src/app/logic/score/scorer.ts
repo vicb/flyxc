@@ -22,8 +22,8 @@ export class Score {
     this.indexes = score.indexes || [];
     this.multiplier = score.multiplier || 1;
     this.circuit = score.circuit || CircuitType.OpenDistance;
-    this.closingRadius = score.closingRadius || null;
-    this.points = (this.distance * this.multiplier) / 1000;
+    this.closingRadius = score.closingRadius ?? null;
+    this.points = score.points ? score.points : (this.distance * this.multiplier) / 1000;
   }
 }
 

@@ -13,7 +13,7 @@ import * as msg from '../logic/messages';
 // @ts-ignore
 import TrackWorker from '../workers/track?worker';
 import { setTimeSec } from './app-slice';
-import { setEnabled, setRoute } from './planner-slice';
+import { setPlannerEnabled, setPlannerRoute } from './planner-slice';
 import { AppDispatch, AppThunk, RootState } from './store';
 
 const FETCH_EVERY_SECONDS = 15;
@@ -148,8 +148,8 @@ export const fetchTrack = createAsyncThunk('track/fetch', async (params: FetchTr
     for (let i = 0; i < route.alt.length; i++) {
       coords.push(new google.maps.LatLng(route.lat[i], route.lon[i]));
     }
-    api.dispatch(setRoute(google.maps.geometry.encoding.encodePath(coords)));
-    api.dispatch(setEnabled(true));
+    api.dispatch(setPlannerRoute(google.maps.geometry.encoding.encodePath(coords)));
+    api.dispatch(setPlannerEnabled(true));
   }
 
   tracks.forEach((track) => {

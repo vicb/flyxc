@@ -8,6 +8,10 @@ import { Score } from '../../logic/score/scorer';
 import * as units from '../../logic/units';
 import { decrementSpeed, incrementSpeed, setSpeed } from '../../redux/planner-slice';
 import { RootState, store } from '../../redux/store';
+import { scoreTrack } from '../../logic/track';
+// introduce here a circular dependency. Issue to solve later
+import * as common from '@flyxc/common';
+import { currentLeague, currentTrack } from '../../redux/selectors';
 
 const ICON_MINUS =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAkAAAAJAQMAAADaX5RTAAAABlBMVEX///9xe4e/5menAAAAE0lEQVQImWP438DQAEP7kNj/GwCK4wo9HA2mvgAAAABJRU5ErkJggg==';
@@ -32,6 +36,8 @@ export class PlannerElement extends connect(store)(LitElement) {
   private hideDetails = store.getState().browser.isSmallScreen;
   @state()
   private isFreeDrawing = false;
+  @state()
+  private track: common.RuntimeTrack | undefined;
 
   private duration?: number;
   private readonly closeHandler = () => this.dispatchEvent(new CustomEvent('close'));
@@ -48,6 +54,7 @@ export class PlannerElement extends connect(store)(LitElement) {
     this.units = state.units;
     this.duration = ((this.distance / this.speed) * 60) / 1000;
     this.isFreeDrawing = state.planner.isFreeDrawing;
+    this.track = currentTrack(state);
   }
 
   static get styles(): CSSResult {
@@ -136,6 +143,14 @@ export class PlannerElement extends connect(store)(LitElement) {
         <div @click=${this.closeHandler} class="hoverable">
           <div><i class="las la-times-circle"></i> Close</div>
         </div>
+        ${when(
+          this.track,
+          () => html` <div @click="${this.scoreTrack}">
+            <div>
+              <b>🆕<i class="las la-trophy"></i>Score🆕</b>
+            </div>
+          </div>`,
+        )}
         <div>
           <div>${this.score.circuit}</div>
           <div class="large">
@@ -144,6 +159,7 @@ export class PlannerElement extends connect(store)(LitElement) {
         </div>
         <div class="collapsible">
           <div>Points = ${this.getMultiplier()}</div>
+          <div>${store.getState().planner.leagueName}</div>
           <div class="large">${this.score.points.toFixed(1)}</div>
         </div>
         <div class="collapsible">
@@ -258,5 +274,12 @@ export class PlannerElement extends connect(store)(LitElement) {
 
   private wheelSpeed(e: WheelEvent): void {
     store.dispatch(e.deltaY > 0 ? incrementSpeed() : decrementSpeed());
+  }
+
+  // compute score on the current selected track
+  private scoreTrack() {
+    if (this.track) {
+      scoreTrack(this.track, currentLeague(store.getState()));
+    }
   }
 }

@@ -104,6 +104,7 @@
     "grant": "^5.4.21",
     "hasha": "^5.2.2",
     "igc-parser": "^1.1.0",
+    "igc-xc-score": "^1.7.0",
     "ioredis": "^5.3.2",
     "lit": "^2.8.0",
     "lodepng": "^2.2.0",

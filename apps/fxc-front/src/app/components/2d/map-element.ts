@@ -11,7 +11,7 @@ import { getApiKey } from '../../apikey';
 import * as msg from '../../logic/messages';
 import { setApiLoading, setTimeSec } from '../../redux/app-slice';
 import { setCurrentLocation, setCurrentZoom } from '../../redux/location-slice';
-import { setIsFreeDrawing, setRoute } from '../../redux/planner-slice';
+import { setPlannerIsFreeDrawing, setPlannerRoute } from '../../redux/planner-slice';
 import * as sel from '../../redux/selectors';
 import { RootState, store } from '../../redux/store';
 import { setCurrentTrackId } from '../../redux/track-slice';
@@ -325,7 +325,7 @@ export class MapElement extends connect(store)(LitElement) {
     (e.currentTarget as SVGRectElement).releasePointerCapture(this.pointerEventId);
     this.pointerEventId = undefined;
     this.freeDrawPath = '';
-    store.dispatch(setIsFreeDrawing(false));
+    store.dispatch(setPlannerIsFreeDrawing(false));
     this.pathPoints = simplify(this.pathPoints, 30);
     let encodedRoute = '';
     if (this.pathPoints.length >= 2 && this.map) {
@@ -341,12 +341,12 @@ export class MapElement extends connect(store)(LitElement) {
         }),
       );
     }
-    store.dispatch(setRoute(encodedRoute));
+    store.dispatch(setPlannerRoute(encodedRoute));
     this.pathPoints.length = 0;
   }
 
   private handleDrawing() {
-    store.dispatch(setIsFreeDrawing(true));
+    store.dispatch(setPlannerIsFreeDrawing(true));
   }
 
   // Center the map on the user location:
