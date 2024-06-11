@@ -1,3 +1,5 @@
+import type { RuntimeTrack } from '@flyxc/common';
+import type { ScoringResult } from '@flyxc/optimizer/lib/optimizer';
 import type { CSSResult, TemplateResult } from 'lit';
 import { css, html, LitElement } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
@@ -5,11 +7,15 @@ import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { when } from 'lit/directives/when.js';
 import { connect } from 'pwa-helpers';
 
+import type { LeagueCode } from '../../logic/score/league/leagues';
 import type { Score } from '../../logic/score/scorer';
+import { ScoreOrigin, Scorer } from '../../logic/score/scorer';
 import * as units from '../../logic/units';
-import { decrementSpeed, incrementSpeed, setSpeed } from '../../redux/planner-slice';
+import { decrementSpeed, incrementSpeed, setDistance, setScore, setSpeed } from '../../redux/planner-slice';
+import { currentTrack } from '../../redux/selectors';
 import type { RootState } from '../../redux/store';
 import { store } from '../../redux/store';
+import { setCurrentTrackId } from '../../redux/track-slice';
 
 const ICON_MINUS =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAkAAAAJAQMAAADaX5RTAAAABlBMVEX///9xe4e/5menAAAAE0lEQVQImWP438DQAEP7kNj/GwCK4wo9HA2mvgAAAABJRU5ErkJggg==';
@@ -34,14 +40,23 @@ export class PlannerElement extends connect(store)(LitElement) {
   private hideDetails = store.getState().browser.isSmallScreen;
   @state()
   private isFreeDrawing = false;
+  @state()
+  private currentTrack?: RuntimeTrack;
+  @state()
+  private league: LeagueCode = 'xc';
 
   private duration?: number;
   private readonly closeHandler = () => this.dispatchEvent(new CustomEvent('close'));
   private readonly closeFlightHandler = () => this.dispatchEvent(new CustomEvent('close-flight'));
   private readonly shareHandler = () => this.dispatchEvent(new CustomEvent('share'));
   private readonly downloadHandler = () => this.dispatchEvent(new CustomEvent('download'));
-  private readonly resetHandler = () => this.dispatchEvent(new CustomEvent('reset'));
+  private readonly resetHandler = () => {
+    store.dispatch(setCurrentTrackId(undefined));
+    return this.dispatchEvent(new CustomEvent('reset'));
+  };
   private readonly drawHandler = () => this.dispatchEvent(new CustomEvent('draw-route'));
+  private scoringRequestId = 0;
+  private scorer?: Scorer;
 
   stateChanged(state: RootState): void {
     this.distance = state.planner.distance;
@@ -50,6 +65,14 @@ export class PlannerElement extends connect(store)(LitElement) {
     this.units = state.units;
     this.duration = ((this.distance / this.speed) * 60) / 1000;
     this.isFreeDrawing = state.planner.isFreeDrawing;
+    this.currentTrack = currentTrack(state);
+    this.league = state.planner.league;
+  }
+
+  disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.scorer?.cleanup();
+    this.scorer = undefined;
   }
 
   static get styles(): CSSResult {
@@ -141,12 +164,12 @@ export class PlannerElement extends connect(store)(LitElement) {
         <div>
           <div>${this.score.circuit}</div>
           <div class="large">
-            ${unsafeHTML(units.formatUnit(this.score.distanceM / 1000, this.units.distance, undefined, 'unit'))}
+            ${unsafeHTML(units.formatUnit(this.score.lengthKm, this.units.distance, undefined, 'unit'))}
           </div>
         </div>
         <div class="collapsible">
           <div>Points = ${this.getMultiplier()}</div>
-          <div class="large">${this.score.points.toFixed(1)}</div>
+          <div class="large">${this.getScore()}</div>
         </div>
         <div class="collapsible">
           <div>Total distance</div>
@@ -185,6 +208,12 @@ export class PlannerElement extends connect(store)(LitElement) {
             ${unsafeHTML(units.formatUnit(this.speed as number, this.units.speed, undefined, 'unit'))}
           </div>
         </div>
+        ${when(
+          this.currentTrack,
+          () => html` <div class="collapsible hoverable" @click=${this.handleScoreAction}>
+            <span><i class="las la-trophy"></i>Score Track</span>
+          </div>`,
+        )}
         <div
           @click=${this.drawHandler}
           class=${when(
@@ -219,7 +248,11 @@ export class PlannerElement extends connect(store)(LitElement) {
   }
 
   private getMultiplier() {
-    return this.score?.multiplier == 1 ? 'kms' : `${this.score?.multiplier} x kms`;
+    return this.score?.multiplier === 1 ? 'kms' : `${this.score?.multiplier} x kms`;
+  }
+
+  private getScore() {
+    return this.score?.score.toFixed(1) ?? '';
   }
 
   private getDuration(): string {
@@ -260,5 +293,36 @@ export class PlannerElement extends connect(store)(LitElement) {
 
   private wheelSpeed(e: WheelEvent): void {
     store.dispatch(e.deltaY > 0 ? incrementSpeed() : decrementSpeed());
+  }
+
+  private handleScoreAction() {
+    if (!this.currentTrack) {
+      return;
+    }
+    const track = this.currentTrack;
+    const points = track.lat.map((lat, index) => ({
+      lat,
+      lon: track.lon[index],
+      alt: track.alt[index],
+      timeSec: track.timeSec[index],
+    }));
+    this.scorer =
+      this.scorer ??
+      new Scorer(
+        (result) => this.handleScoringResult(result),
+        () => this.scoringRequestId,
+      );
+    this.scorer.score(points, this.league, ++this.scoringRequestId);
+  }
+
+  private handleScoringResult(result: ScoringResult) {
+    store.dispatch(setScore({ ...result, origin: ScoreOrigin.TRACK }));
+    if (this.currentTrack && this.currentTrack.timeSec.length > 1) {
+      const lastTimeSec = this.currentTrack.timeSec.at(-1)!;
+      const durationS = lastTimeSec - this.currentTrack.timeSec[0];
+      store.dispatch(setSpeed((result.lengthKm / durationS) * 3600));
+      this.duration = durationS;
+    }
+    store.dispatch(setDistance(result.lengthKm * 1000));
   }
 }
